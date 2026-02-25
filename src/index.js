@@ -82,7 +82,8 @@ async function checkMonitor(monitor) {
 
     for (const listing of listings) {
       if (listing.listingType !== 'standard') continue;
-      if (listing.price > maxPrice) continue;
+      const totalPrice = listing.price + (listing.shippingPrice || 0);
+      if (totalPrice > maxPrice) continue;
 
       // Create a unique listing ID from seller + price + quantity
       const listingId = `${listing.sellerName}-${listing.price}-${listing.quantity}`;
