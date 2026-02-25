@@ -20,21 +20,34 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'add-monitor') {
       const url = interaction.options.getString('url');
       const maxPrice = interaction.options.getNumber('max_price');
+      const minPrice = interaction.options.getNumber('min_price');
       const parsed = parseProductUrl(url);
       if (!parsed) return interaction.reply({ content: '❌ Invalid TCGPlayer URL.', ephemeral: true });
+      if (!maxPrice && !minPrice) return interaction.reply({ content: '❌ You must set at least one: `max_price` (Buy Target) or `min_price` (Sell Target).', ephemeral: true });
 
-      db.run('INSERT INTO monitors (user_id, product_id, product_name, product_url, max_price) VALUES (?, ?, ?, ?, ?)',
-        [userId, parsed.productId, parsed.name, url, maxPrice]);
+      // Migrate: add min_price column if missing
+      try { db.run('ALTER TABLE monitors ADD COLUMN min_price REAL'); save(); } catch(e) {}
+
+      db.run('INSERT INTO monitors (user_id, product_id, product_name, product_url, max_price, min_price) VALUES (?, ?, ?, ?, ?, ?)',
+        [userId, parsed.productId, parsed.name, url, maxPrice, minPrice]);
       save();
-      await interaction.reply(`✅ Monitoring **${parsed.name}** for listings under **$${maxPrice.toFixed(2)}**. I'll DM you when I find a match!`);
+
+      let msg = `✅ Monitoring **${parsed.name}**\n`;
+      if (maxPrice) msg += `📉 Buy Target (Max Price): **$${maxPrice.toFixed(2)}**\n`;
+      if (minPrice) msg += `📈 Sell Target (Min Price): **$${minPrice.toFixed(2)}**\n`;
+      msg += `I'll DM you when I find a match!`;
+      await interaction.reply(msg);
     }
 
     else if (interaction.commandName === 'list-monitors') {
-      const rows = db.exec('SELECT id, product_name, max_price, active FROM monitors WHERE user_id = ? ORDER BY id', [userId]);
+      const rows = db.exec('SELECT id, product_name, max_price, active, min_price FROM monitors WHERE user_id = ? ORDER BY id', [userId]);
       if (!rows.length || !rows[0].values.length) return interaction.reply({ content: 'No monitors found.', ephemeral: true });
       const lines = rows[0].values.map(r => {
         const status = r[3] ? '🟢' : '⏸️';
-        return `${status} **#${r[0]}** — ${r[1]} (≤ $${Number(r[2]).toFixed(2)})`;
+        const targets = [];
+        if (r[2]) targets.push(`📉 Buy ≤ $${Number(r[2]).toFixed(2)}`);
+        if (r[4]) targets.push(`📈 Sell ≥ $${Number(r[4]).toFixed(2)}`);
+        return `${status} **#${r[0]}** — ${r[1]} (${targets.join(' | ')})`;
       });
       await interaction.reply({ content: lines.join('\n'), ephemeral: true });
     }
@@ -74,7 +87,7 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 async function checkMonitor(monitor) {
-  const [id, userId, productId, productName, productUrl, maxPrice] = monitor;
+  const [id, userId, productId, productName, productUrl, maxPrice, minPrice] = monitor;
   try {
     const data = await fetchListings(productId);
     const listings = data?.results?.[0]?.results || [];
@@ -83,7 +96,12 @@ async function checkMonitor(monitor) {
     for (const listing of listings) {
       if (listing.listingType !== 'standard') continue;
       const totalPrice = listing.price + (listing.shippingPrice || 0);
-      if (totalPrice > maxPrice) continue;
+
+      // Check if this listing matches either target
+      let alertType = null;
+      if (maxPrice && totalPrice <= maxPrice) alertType = 'buy';
+      else if (minPrice && totalPrice >= minPrice) alertType = 'sell';
+      if (!alertType) continue;
 
       // Create a unique listing ID from seller + price + quantity
       const listingId = `${listing.sellerName}-${listing.price}-${listing.quantity}`;
@@ -100,9 +118,10 @@ async function checkMonitor(monitor) {
       // Send DM
       try {
         const user = await client.users.fetch(userId);
+        const isBuy = alertType === 'buy';
         const embed = new EmbedBuilder()
-          .setColor(0x00c853)
-          .setTitle(`💰 ${productName}`)
+          .setColor(isBuy ? 0x00c853 : 0xff9800)
+          .setTitle(`${isBuy ? '📉 Buy Alert' : '📈 Sell Alert'} — ${productName}`)
           .setURL(productUrl)
           .addFields(
             { name: 'Price', value: `$${listing.price.toFixed(2)}`, inline: true },
@@ -128,7 +147,7 @@ async function checkMonitor(monitor) {
 function startMonitorLoop() {
   setInterval(async () => {
     const db = await getDb();
-    const rows = db.exec('SELECT id, user_id, product_id, product_name, product_url, max_price FROM monitors WHERE active = 1');
+    const rows = db.exec('SELECT id, user_id, product_id, product_name, product_url, max_price, min_price FROM monitors WHERE active = 1');
     if (!rows.length) return;
     for (let i = 0; i < rows[0].values.length; i++) {
       await checkMonitor(rows[0].values[i]);

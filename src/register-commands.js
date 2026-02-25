@@ -2,9 +2,10 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 const { REST, Routes, SlashCommandBuilder } = require('discord.js');
 
 const commands = [
-  new SlashCommandBuilder().setName('add-monitor').setDescription('Monitor a TCGPlayer product for low prices')
+  new SlashCommandBuilder().setName('add-monitor').setDescription('Monitor a TCGPlayer product for price alerts')
     .addStringOption(o => o.setName('url').setDescription('TCGPlayer product URL').setRequired(true))
-    .addNumberOption(o => o.setName('max_price').setDescription('Maximum price to alert on').setRequired(true)),
+    .addNumberOption(o => o.setName('max_price').setDescription('Buy Target (Max Price) — alert when total price drops to or below this').setRequired(false))
+    .addNumberOption(o => o.setName('min_price').setDescription('Sell Target (Min Price) — alert when total price rises to or above this').setRequired(false)),
   new SlashCommandBuilder().setName('list-monitors').setDescription('List your active monitors'),
   new SlashCommandBuilder().setName('remove-monitor').setDescription('Remove a monitor')
     .addIntegerOption(o => o.setName('id').setDescription('Monitor ID').setRequired(true)),
